@@ -24,23 +24,22 @@ This document outlines the key architectural and code decisions made while build
 
 ---
 
-### 2. LLM Choice: Google Gemini 1.5 Flash
+### 2. LLM Choice: OpenRouter with GPT-4o-mini
 
-**Decision:** Use `gemini-1.5-flash` as the language model.
+**Decision:** Use OpenRouter with `openai/gpt-4o-mini` model.
 
 **Rationale:**
-- Cost-effective (significantly cheaper than GPT-4)
-- Native function calling support
+- Reliable function/tool calling support (required for MCP integration)
 - Fast response times suitable for customer support
-- Free tier available for development/testing
-- Multi-turn conversation support
-- **Stable production model** (vs experimental versions)
+- OpenAI-compatible API makes integration simple
+- High-quality responses from a capable model
+- Consistent availability and performance
 
 **Trade-offs:**
-- Slightly less capable than larger models for complex reasoning
-- Rate limits on free tier require error handling
+- Not free (but very affordable at ~$0.15/1M input tokens)
+- Depends on third-party service (OpenRouter)
 
-**Update (Dec 2024):** Initially used `gemini-2.0-flash-exp` but switched to `gemini-1.5-flash` for stability and better rate limit handling in production.
+**Update (Dec 2024):** Switched from Llama 3.2 free tier to GPT-4o-mini due to lack of tool/function calling support in the free Llama model. GPT-4o-mini provides reliable tool calling which is essential for MCP integration.
 
 ---
 
@@ -260,15 +259,23 @@ for attempt in range(max_retries):  # max_retries = 3
 
 ---
 
-### 13. Stable Model Selection
+### 13. Provider Selection: OpenRouter
 
-**Decision:** Use `gemini-1.5-flash` instead of experimental models.
+**Decision:** Use OpenRouter as the LLM provider instead of direct Gemini API.
 
 **Rationale:**
-- Experimental models (`gemini-2.0-flash-exp`) have stricter quotas
-- Production stability is more important than cutting-edge features
-- Consistent behavior across deployments
-- Better rate limit allowances
+- OpenRouter aggregates multiple LLM providers with unified API
+- OpenAI-compatible API makes code simpler and more portable
+- Better rate limits than Gemini free tier
+- Easy to switch models without code changes
+- Supports function calling with OpenAI models
+
+**Current Model:**
+- `openai/gpt-4o-mini` (default) - Affordable with excellent tool calling support
+
+**Alternative Models (if needed):**
+- `openai/gpt-3.5-turbo` - Cheaper, still supports function calling
+- `anthropic/claude-3-haiku` - Fast and affordable
 
 ---
 
@@ -452,6 +459,9 @@ This architecture supports rapid iteration while maintaining a clear path to pro
 |------|----------|--------|
 | Initial | Model Selection | Used `gemini-2.0-flash-exp` |
 | Dec 2024 | Model Selection | Switched to `gemini-1.5-flash` for stability |
+| Dec 2024 | Provider Switch | Switched from Gemini to OpenRouter (Llama 3.2) |
 | Dec 2024 | Error Handling | Added retry logic with exponential backoff |
 | Dec 2024 | Token Optimization | Reduced history from 10 to 6 messages |
+| Dec 2024 | Debugging | Added debug logging for troubleshooting |
+| Dec 2024 | Model Update | Switched from Llama 3.2 free to GPT-4o-mini for tool calling support |
 
