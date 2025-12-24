@@ -1,14 +1,14 @@
 # 🖥️ TechSupport Pro - Customer Support Chatbot
 
-A modern AI-powered customer support chatbot for a computer products company. Built with Streamlit, Google Gemini Flash, and MCP (Model Context Protocol) for seamless backend integration.
+A modern AI-powered customer support chatbot for a computer products company. Built with Streamlit, OpenRouter (GPT-4o-mini), and MCP (Model Context Protocol) for seamless backend integration.
 
 ![Python](https://img.shields.io/badge/Python-3.9+-blue.svg)
 ![Streamlit](https://img.shields.io/badge/Streamlit-1.31+-red.svg)
-![Gemini](https://img.shields.io/badge/Gemini-2.0_Flash-purple.svg)
+![OpenRouter](https://img.shields.io/badge/OpenRouter-GPT--4o--mini-purple.svg)
 
 ## ✨ Features
 
-- **🤖 AI-Powered Support**: Natural language understanding powered by Google Gemini 2.0 Flash
+- **🤖 AI-Powered Support**: Natural language understanding powered by GPT-4o-mini via OpenRouter
 - **🔐 Customer Authentication**: Secure PIN-based customer verification
 - **📦 Order Management**: View order history and place new orders
 - **🔍 Product Search**: Search and browse products across categories
@@ -28,7 +28,7 @@ A modern AI-powered customer support chatbot for a computer products company. Bu
 ### Prerequisites
 
 - Python 3.9+
-- Google API Key (for Gemini)
+- OpenRouter API Key (FREE at https://openrouter.ai/keys)
 
 ### Installation
 
@@ -46,7 +46,8 @@ pip install -r requirements.txt
 3. Configure your API key:
 ```bash
 cp .streamlit/secrets.toml.example .streamlit/secrets.toml
-# Edit .streamlit/secrets.toml and add your GOOGLE_API_KEY
+# Edit .streamlit/secrets.toml and add your OPENROUTER_API_KEY
+# Get FREE key at: https://openrouter.ai/keys
 ```
 
 4. Run the app:
@@ -90,13 +91,13 @@ Use these test accounts to try the chatbot:
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Streamlit UI  │────▶│  Gemini Flash   │────▶│   MCP Server    │
-│   (Frontend)    │◀────│  (LLM Engine)   │◀────│  (Backend API)  │
+│   Streamlit UI  │────▶│   OpenRouter    │────▶│   MCP Server    │
+│   (Frontend)    │◀────│  (GPT-4o-mini)  │◀────│  (Backend API)  │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
 - **Streamlit**: Modern chat UI with real-time updates
-- **Gemini Flash**: Cost-effective LLM for natural language understanding
+- **OpenRouter**: Access to GPT-4o-mini with function calling support
 - **MCP Server**: Backend API for products, customers, and orders
 
 ## 📁 Project Structure
@@ -117,7 +118,7 @@ Use these test accounts to try the chatbot:
 
 | Variable | Description |
 |----------|-------------|
-| GOOGLE_API_KEY | Google AI API key for Gemini |
+| OPENROUTER_API_KEY | OpenRouter API key (FREE at https://openrouter.ai/keys) |
 
 ### MCP Server
 
@@ -131,7 +132,7 @@ The chatbot connects to an MCP server that provides:
 1. Push your code to GitHub
 2. Go to [share.streamlit.io](https://share.streamlit.io)
 3. Connect your GitHub repository
-4. Add your `GOOGLE_API_KEY` in the app secrets
+4. Add your `OPENROUTER_API_KEY` in the app secrets
 5. Deploy!
 
 ## 🤝 Contributing

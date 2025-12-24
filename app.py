@@ -1,15 +1,36 @@
 """
 Customer Support Chatbot for Computer Products Company
-Built with Streamlit and Google Gemini Flash
+Built with Streamlit and OpenRouter (GPT-4o-mini)
 """
 import streamlit as st
 import asyncio
 import json
-import google.generativeai as genai
-from mcp_client import MCPClient, MCP_TOOLS, get_tool_definitions_for_gemini
+import time
+import httpx
+from openai import OpenAI
+from mcp_client import MCPClient, MCP_TOOLS
 
 # Configuration
 MCP_SERVER_URL = "https://vipfapwm3x.us-east-1.awsapprunner.com/mcp"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+# OpenAI model with function calling support
+DEFAULT_MODEL = "openai/gpt-4o-mini"
+
+
+def run_async(coro):
+    """Run async code safely in Streamlit environment"""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result(timeout=30)
+        else:
+            return loop.run_until_complete(coro)
+    except RuntimeError:
+        return asyncio.run(coro)
+
 
 # Page configuration
 st.set_page_config(
@@ -19,108 +40,159 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for modern UI
+# Custom CSS for modern dark UI
 st.markdown("""
 <style>
-    /* Main container styling */
-    .main {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    }
-    
-    /* Chat message styling */
-    .stChatMessage {
-        background-color: rgba(255, 255, 255, 0.95);
-        border-radius: 15px;
-        padding: 10px;
-        margin: 5px 0;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-    }
-    
-    /* Header styling */
-    .header-container {
-        background: linear-gradient(90deg, #1a1a2e 0%, #16213e 100%);
-        padding: 20px;
-        border-radius: 15px;
-        margin-bottom: 20px;
-        color: white;
-        text-align: center;
-    }
-    
-    .header-title {
-        font-size: 2.5em;
-        font-weight: bold;
-        margin: 0;
-        color: #00d4ff;
-    }
-    
-    .header-subtitle {
-        font-size: 1.2em;
-        color: #a0a0a0;
-        margin-top: 5px;
+    /* Main app background - dark gradient */
+    .stApp {
+        background: linear-gradient(135deg, #0f0c29 0%, #302b63 50%, #24243e 100%);
     }
     
     /* Sidebar styling */
-    .sidebar-info {
-        background: linear-gradient(180deg, #1e3a5f 0%, #0d1b2a 100%);
-        padding: 15px;
-        border-radius: 10px;
-        margin: 10px 0;
-        color: white;
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #1a1a2e 0%, #16213e 100%);
+    }
+    [data-testid="stSidebar"] * {
+        color: #e0e0e0 !important;
+    }
+    [data-testid="stSidebar"] h1, [data-testid="stSidebar"] h2, [data-testid="stSidebar"] h3 {
+        color: #00d4ff !important;
     }
     
-    /* Button styling */
+    /* Chat messages - dark cards with good contrast */
+    [data-testid="stChatMessage"] {
+        background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%) !important;
+        border: 1px solid #3d3d5c;
+        border-radius: 16px !important;
+        padding: 16px !important;
+        margin: 10px 0 !important;
+        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    }
+    
+    /* Chat message text - ensure readability */
+    [data-testid="stChatMessage"] p,
+    [data-testid="stChatMessage"] li,
+    [data-testid="stChatMessage"] span {
+        color: #f0f0f0 !important;
+        font-size: 1rem;
+        line-height: 1.6;
+    }
+    
+    /* Code blocks in chat */
+    [data-testid="stChatMessage"] code {
+        background: #1a1a2e !important;
+        color: #00d4ff !important;
+        padding: 2px 6px;
+        border-radius: 4px;
+    }
+    
+    /* User message accent */
+    [data-testid="stChatMessage"][data-testid*="user"] {
+        border-left: 4px solid #00d4ff;
+    }
+    
+    /* Assistant message accent */
+    [data-testid="stChatMessage"][data-testid*="assistant"] {
+        border-left: 4px solid #9d4edd;
+    }
+    
+    /* Header container */
+    .header-container {
+        background: linear-gradient(90deg, #1a1a2e 0%, #16213e 50%, #0f3460 100%);
+        padding: 24px 32px;
+        border-radius: 20px;
+        margin-bottom: 24px;
+        text-align: center;
+        border: 1px solid #3d3d5c;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .header-title {
+        font-size: 2.5em;
+        font-weight: 800;
+        margin: 0;
+        background: linear-gradient(90deg, #00d4ff, #9d4edd);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        background-clip: text;
+    }
+    .header-subtitle {
+        font-size: 1.15em;
+        color: #a0a0c0;
+        margin-top: 8px;
+    }
+    
+    /* Buttons */
     .stButton > button {
         background: linear-gradient(90deg, #00d4ff 0%, #0099cc 100%);
-        color: white;
+        color: white !important;
         border: none;
         border-radius: 25px;
         padding: 10px 25px;
-        font-weight: bold;
+        font-weight: 600;
         transition: all 0.3s ease;
+        box-shadow: 0 4px 15px rgba(0, 212, 255, 0.3);
     }
-    
     .stButton > button:hover {
         transform: translateY(-2px);
-        box-shadow: 0 5px 20px rgba(0, 212, 255, 0.4);
+        box-shadow: 0 6px 25px rgba(0, 212, 255, 0.5);
     }
     
-    /* Tool call indicator */
-    .tool-call {
-        background: #f0f8ff;
-        border-left: 4px solid #00d4ff;
-        padding: 10px;
-        margin: 5px 0;
-        border-radius: 0 10px 10px 0;
-        font-family: monospace;
-        font-size: 0.85em;
+    /* Status indicators */
+    .status-connected { color: #00ff88 !important; font-weight: bold; }
+    
+    /* Chat input styling */
+    [data-testid="stChatInput"] {
+        background: #1e1e2f !important;
+        border: 1px solid #3d3d5c !important;
+        border-radius: 12px !important;
+    }
+    [data-testid="stChatInput"] textarea {
+        color: #f0f0f0 !important;
+        background: transparent !important;
     }
     
-    /* Status indicator */
-    .status-connected {
-        color: #00ff88;
-        font-weight: bold;
+    /* Expander styling */
+    .streamlit-expanderHeader {
+        background: #1e1e2f !important;
+        color: #e0e0e0 !important;
+        border-radius: 8px;
     }
     
-    .status-disconnected {
-        color: #ff4444;
-        font-weight: bold;
-    }
-    
-    /* Product category badges */
-    .category-badge {
-        display: inline-block;
-        padding: 5px 15px;
+    /* Welcome card */
+    .welcome-card {
+        background: linear-gradient(135deg, #1e1e2f 0%, #2d2d44 100%);
+        border: 1px solid #3d3d5c;
         border-radius: 20px;
-        margin: 3px;
-        font-size: 0.9em;
-        cursor: pointer;
+        padding: 40px;
+        margin: 20px 0;
+        box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    }
+    .welcome-card h2 {
+        color: #00d4ff;
+        margin-bottom: 16px;
+    }
+    .welcome-card p {
+        color: #c0c0d0;
+        font-size: 1.1em;
+    }
+    .feature-badge {
+        display: inline-block;
+        padding: 12px 20px;
+        border-radius: 10px;
+        margin: 8px;
+        font-weight: 600;
+        color: white;
     }
     
-    .cat-computers { background: #4CAF50; color: white; }
-    .cat-monitors { background: #2196F3; color: white; }
-    .cat-printers { background: #FF9800; color: white; }
-    .cat-accessories { background: #9C27B0; color: white; }
-    .cat-networking { background: #F44336; color: white; }
+    /* Markdown text color */
+    .stMarkdown, .stMarkdown p, .stMarkdown li {
+        color: #e0e0e0;
+    }
+    
+    /* Dividers */
+    hr {
+        border-color: #3d3d5c !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -133,23 +205,18 @@ if "customer_info" not in st.session_state:
     st.session_state.customer_info = None
 if "mcp_client" not in st.session_state:
     st.session_state.mcp_client = MCPClient(MCP_SERVER_URL)
-if "chat_history" not in st.session_state:
-    st.session_state.chat_history = []
 
 
-def get_gemini_api_key():
-    """Get Gemini API key from secrets, environment, or session state"""
-    # First check session state (user input)
+def get_api_key():
+    """Get OpenRouter API key from secrets, environment, or session state"""
     if "user_api_key" in st.session_state and st.session_state.user_api_key:
         return st.session_state.user_api_key
-    # Then check Streamlit secrets
     try:
-        return st.secrets["GOOGLE_API_KEY"]
+        return st.secrets["OPENROUTER_API_KEY"]
     except:
         pass
-    # Finally check environment
     import os
-    return os.getenv("GOOGLE_API_KEY", "")
+    return os.getenv("OPENROUTER_API_KEY", "")
 
 
 async def call_mcp_tool(tool_name: str, arguments: dict) -> str:
@@ -158,36 +225,32 @@ async def call_mcp_tool(tool_name: str, arguments: dict) -> str:
     try:
         result = await client.call_tool(tool_name, arguments)
         if "error" in result:
-            return f"Error: {result['error']}"
+            error_msg = result.get('error', {})
+            if isinstance(error_msg, dict):
+                return f"Error: {error_msg.get('message', str(error_msg))}"
+            return f"Error: {error_msg}"
         return result.get("result", "No result returned")
+    except httpx.ConnectError:
+        return "Connection error: Could not connect to MCP server."
+    except httpx.TimeoutException:
+        return "Timeout error: MCP server took too long to respond."
     except Exception as e:
-        return f"Error calling tool: {str(e)}"
+        return f"Error calling tool '{tool_name}': {str(e)}"
 
 
-def process_tool_calls(response) -> tuple[str, list]:
-    """Process tool calls from Gemini response"""
-    tool_results = []
-    
-    for part in response.parts:
-        if hasattr(part, 'function_call') and part.function_call:
-            fc = part.function_call
-            tool_name = fc.name
-            arguments = dict(fc.args) if fc.args else {}
-            
-            # Execute the tool call
-            result = asyncio.run(call_mcp_tool(tool_name, arguments))
-            tool_results.append({
-                "tool": tool_name,
-                "arguments": arguments,
-                "result": result
-            })
-            
-            # Check if customer was verified
-            if tool_name == "verify_customer_pin" and "Customer ID:" in result:
-                st.session_state.customer_verified = True
-                st.session_state.customer_info = result
-    
-    return tool_results
+def get_openai_tools():
+    """Get tool definitions in OpenAI format"""
+    tools = []
+    for tool in MCP_TOOLS:
+        tools.append({
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["parameters"]
+            }
+        })
+    return tools
 
 
 def get_system_prompt():
@@ -226,89 +289,156 @@ Available product categories:
 
 {customer_context}
 
-When using tools:
-- Use search_products for natural language queries
-- Use list_products with category filter for browsing
-- Use get_product for specific SKU details
-- Always verify customer before accessing their orders or placing new orders
-- For orders, include sku, quantity, unit_price (as string), and currency (USD)
+When you need to perform actions, use the available tools:
+- verify_customer_pin: Verify customer with email and PIN
+- list_products: List products by category
+- search_products: Search products by name/description
+- get_product: Get product details by SKU
+- list_orders: View customer orders
+- create_order: Place a new order (requires verified customer)
 """
 
 
-def chat_with_gemini(user_message: str) -> str:
-    """Send a message to Gemini and get a response with tool use"""
-    api_key = get_gemini_api_key()
+def chat_with_openrouter(user_message: str, max_retries: int = 3) -> str:
+    """Send a message to OpenRouter and get a response with tool use"""
+    print(f"[DEBUG] chat_with_openrouter called with: {user_message}")
+    
+    api_key = get_api_key()
+    print(f"[DEBUG] API key found: {'Yes' if api_key else 'No'}")
+    
     if not api_key:
-        return "⚠️ Please configure your Google API key in Streamlit secrets (GOOGLE_API_KEY) to use the chatbot."
+        return "⚠️ Please configure your OpenRouter API key in the sidebar or in Streamlit secrets (OPENROUTER_API_KEY)."
     
-    genai.configure(api_key=api_key)
-    
-    # Initialize model with tools
-    model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash-exp",
-        tools=[get_tool_definitions_for_gemini()],
-        system_instruction=get_system_prompt()
+    client = OpenAI(
+        base_url=OPENROUTER_BASE_URL,
+        api_key=api_key,
     )
     
-    # Build conversation history
-    history = []
-    for msg in st.session_state.messages[-10:]:  # Last 10 messages for context
-        role = "user" if msg["role"] == "user" else "model"
-        history.append({"role": role, "parts": [msg["content"]]})
+    # Build conversation messages
+    messages = [{"role": "system", "content": get_system_prompt()}]
     
-    # Start chat
-    chat = model.start_chat(history=history)
+    # Add last 6 messages for context
+    for msg in st.session_state.messages[-6:]:
+        messages.append({"role": msg["role"], "content": msg["content"]})
     
-    # Send message and handle tool calls
-    response = chat.send_message(user_message)
+    # Add current user message
+    messages.append({"role": "user", "content": user_message})
     
-    # Process any tool calls
-    max_iterations = 5
-    iteration = 0
+    tools = get_openai_tools()
     all_tool_results = []
     
-    while iteration < max_iterations:
-        has_tool_call = any(
-            hasattr(part, 'function_call') and part.function_call 
-            for part in response.parts
-        )
-        
-        if not has_tool_call:
-            break
-        
-        tool_results = process_tool_calls(response)
-        all_tool_results.extend(tool_results)
-        
-        # Send tool results back to the model
-        function_responses = []
-        for tr in tool_results:
-            function_responses.append(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=tr["tool"],
-                        response={"result": tr["result"]}
-                    )
-                )
+    for attempt in range(max_retries):
+        try:
+            print(f"[DEBUG] Calling OpenRouter API with model: {DEFAULT_MODEL}")
+            
+            response = client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=messages,
+                tools=tools,
+                tool_choice="auto",
+                extra_headers={
+                    "HTTP-Referer": "https://techsupport-pro.streamlit.app",
+                    "X-Title": "TechSupport Pro Chatbot"
+                }
             )
-        
-        response = chat.send_message(function_responses)
-        iteration += 1
+            
+            assistant_message = response.choices[0].message
+            
+            # Process tool calls if any
+            max_iterations = 5
+            iteration = 0
+            
+            while assistant_message.tool_calls and iteration < max_iterations:
+                print(f"[DEBUG] Processing {len(assistant_message.tool_calls)} tool calls...")
+                
+                # Add assistant message with tool calls
+                messages.append({
+                    "role": "assistant",
+                    "content": assistant_message.content or "",
+                    "tool_calls": [
+                        {
+                            "id": tc.id,
+                            "type": "function",
+                            "function": {
+                                "name": tc.function.name,
+                                "arguments": tc.function.arguments
+                            }
+                        }
+                        for tc in assistant_message.tool_calls
+                    ]
+                })
+                
+                # Execute each tool call
+                for tool_call in assistant_message.tool_calls:
+                    tool_name = tool_call.function.name
+                    try:
+                        arguments = json.loads(tool_call.function.arguments)
+                    except:
+                        arguments = {}
+                    
+                    print(f"[DEBUG] Calling tool: {tool_name} with args: {arguments}")
+                    
+                    try:
+                        result = run_async(call_mcp_tool(tool_name, arguments))
+                        print(f"[DEBUG] Tool result: {str(result)[:200]}")
+                    except Exception as e:
+                        result = f"Error: {str(e)}"
+                    
+                    all_tool_results.append({
+                        "tool": tool_name,
+                        "arguments": arguments,
+                        "result": result
+                    })
+                    
+                    # Check for customer verification
+                    if tool_name == "verify_customer_pin" and "Customer ID:" in str(result):
+                        print("[DEBUG] Customer verified!")
+                        st.session_state.customer_verified = True
+                        st.session_state.customer_info = result
+                    
+                    # Add tool result to messages
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call.id,
+                        "content": str(result)
+                    })
+                
+                # Get next response
+                response = client.chat.completions.create(
+                    model=DEFAULT_MODEL,
+                    messages=messages,
+                    tools=tools,
+                    tool_choice="auto",
+                    extra_headers={
+                        "HTTP-Referer": "https://techsupport-pro.streamlit.app",
+                        "X-Title": "TechSupport Pro Chatbot"
+                    }
+                )
+                assistant_message = response.choices[0].message
+                iteration += 1
+            
+            # Extract final response
+            final_response = assistant_message.content or "I apologize, but I couldn't generate a response."
+            
+            # Add tool info for debugging
+            if all_tool_results:
+                tool_info = "\n\n---\n*🔧 Tools used:*\n"
+                for tr in all_tool_results:
+                    result_preview = str(tr['result'])[:100]
+                    tool_info += f"- `{tr['tool']}` → {result_preview}{'...' if len(str(tr['result'])) > 100 else ''}\n"
+                final_response += tool_info
+            
+            return final_response
+            
+        except Exception as e:
+            print(f"[DEBUG] Error: {str(e)}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
+            else:
+                return f"⚠️ **Error**\n\nAn error occurred: {str(e)}\n\n*Please check your API key and try again.*"
     
-    # Extract final text response
-    final_response = ""
-    for part in response.parts:
-        if hasattr(part, 'text') and part.text:
-            final_response += part.text
-    
-    # Add tool call info to response if any
-    if all_tool_results:
-        tool_info = "\n\n---\n*Tools used:*\n"
-        for tr in all_tool_results:
-            tool_info += f"- `{tr['tool']}({json.dumps(tr['arguments'])})`\n"
-        # Optionally append tool info (commented out for cleaner UI)
-        # final_response += tool_info
-    
-    return final_response or "I apologize, but I couldn't generate a response. Please try again."
+    return "I apologize, but I couldn't generate a response. Please try again."
 
 
 # Sidebar
@@ -325,7 +455,7 @@ with st.sidebar:
     # Connection status
     st.markdown("### 🔌 System Status")
     st.markdown(f"**MCP Server:** <span class='status-connected'>Connected</span>", unsafe_allow_html=True)
-    st.markdown(f"**LLM:** Gemini 2.0 Flash")
+    st.markdown(f"**LLM:** GPT-4o-mini")
     
     st.divider()
     
@@ -334,7 +464,6 @@ with st.sidebar:
     if st.session_state.customer_verified:
         st.success("✅ Customer Verified")
         if st.session_state.customer_info:
-            # Extract customer name from info
             info_lines = st.session_state.customer_info.split('\n')
             for line in info_lines:
                 if 'Name:' in line:
@@ -351,27 +480,32 @@ with st.sidebar:
     
     col1, col2 = st.columns(2)
     with col1:
-        if st.button("🖥️ Computers", use_container_width=True):
+        if st.button("🖥️ Computers", use_container_width=True, key="btn_computers"):
             st.session_state.quick_action = "Show me computers"
+            st.rerun()
     with col2:
-        if st.button("🖵 Monitors", use_container_width=True):
+        if st.button("🖵 Monitors", use_container_width=True, key="btn_monitors"):
             st.session_state.quick_action = "Show me monitors"
+            st.rerun()
     
     col3, col4 = st.columns(2)
     with col3:
-        if st.button("🖨️ Printers", use_container_width=True):
+        if st.button("🖨️ Printers", use_container_width=True, key="btn_printers"):
             st.session_state.quick_action = "Show me printers"
+            st.rerun()
     with col4:
-        if st.button("🎧 Accessories", use_container_width=True):
+        if st.button("🎧 Accessories", use_container_width=True, key="btn_accessories"):
             st.session_state.quick_action = "Show me accessories"
+            st.rerun()
     
-    if st.button("📦 My Orders", use_container_width=True):
+    if st.button("📦 My Orders", use_container_width=True, key="btn_orders"):
         st.session_state.quick_action = "Show my orders"
+        st.rerun()
     
     st.divider()
     
     # Clear chat button
-    if st.button("🗑️ Clear Chat", use_container_width=True):
+    if st.button("🗑️ Clear Chat", use_container_width=True, key="btn_clear"):
         st.session_state.messages = []
         st.session_state.customer_verified = False
         st.session_state.customer_info = None
@@ -381,16 +515,16 @@ with st.sidebar:
     
     # API Key configuration
     st.markdown("### 🔑 API Configuration")
-    api_key = get_gemini_api_key()
+    api_key = get_api_key()
     if api_key:
         st.success("✅ API Key configured")
     else:
         st.warning("⚠️ API Key needed")
         user_key = st.text_input(
-            "Enter Google API Key:",
+            "Enter OpenRouter API Key:",
             type="password",
             key="api_key_input",
-            help="Get your free API key at https://aistudio.google.com/apikey"
+            help="Get your free API key at https://openrouter.ai/keys"
         )
         if user_key:
             st.session_state.user_api_key = user_key
@@ -419,6 +553,62 @@ st.markdown("""
 </div>
 """, unsafe_allow_html=True)
 
+# Verification notice banner
+if not st.session_state.customer_verified:
+    st.markdown("""
+    <div style="
+        background: linear-gradient(90deg, #ff6b6b 0%, #ee5a24 100%);
+        border-radius: 12px;
+        padding: 16px 24px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 15px rgba(238, 90, 36, 0.3);
+    ">
+        <span style="font-size: 2em;">🔐</span>
+        <div>
+            <p style="color: white; font-weight: 700; font-size: 1.1em; margin: 0;">
+                Verify Your Account to Place Orders
+            </p>
+            <p style="color: rgba(255,255,255,0.9); font-size: 0.95em; margin: 4px 0 0 0;">
+                Please verify with your <strong>email</strong> and <strong>PIN</strong> before placing orders.
+                <br/>Example: <em>"Verify donaldgarcia@example.net, PIN: 7912"</em>
+            </p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+else:
+    # Show verified status banner
+    customer_name = ""
+    if st.session_state.customer_info:
+        for line in st.session_state.customer_info.split('\n'):
+            if 'verified:' in line.lower():
+                customer_name = line.split(':')[-1].strip()
+                break
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(90deg, #00b894 0%, #00cec9 100%);
+        border-radius: 12px;
+        padding: 14px 24px;
+        margin-bottom: 20px;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+        box-shadow: 0 4px 15px rgba(0, 184, 148, 0.3);
+    ">
+        <span style="font-size: 1.8em;">✅</span>
+        <div>
+            <p style="color: white; font-weight: 700; font-size: 1.1em; margin: 0;">
+                Welcome, {customer_name if customer_name else 'Verified Customer'}!
+            </p>
+            <p style="color: rgba(255,255,255,0.9); font-size: 0.9em; margin: 4px 0 0 0;">
+                You can now browse products, view orders, and place new orders.
+            </p>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
 # Display chat messages
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
@@ -429,31 +619,25 @@ if "quick_action" in st.session_state and st.session_state.quick_action:
     user_input = st.session_state.quick_action
     st.session_state.quick_action = None
     
-    # Add user message
     st.session_state.messages.append({"role": "user", "content": user_input})
-    with st.chat_message("user"):
-        st.markdown(user_input)
     
-    # Get AI response
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            response = chat_with_gemini(user_input)
-        st.markdown(response)
+    with st.spinner("Thinking..."):
+        response = chat_with_openrouter(user_input)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
     st.rerun()
 
 # Chat input
 if prompt := st.chat_input("How can I help you today?"):
-    # Add user message to history
+    print(f"[DEBUG] Chat input received: {prompt}")
+    
     st.session_state.messages.append({"role": "user", "content": prompt})
     with st.chat_message("user"):
         st.markdown(prompt)
     
-    # Get AI response
     with st.chat_message("assistant"):
         with st.spinner("Thinking..."):
-            response = chat_with_gemini(prompt)
+            response = chat_with_openrouter(prompt)
         st.markdown(response)
     
     st.session_state.messages.append({"role": "assistant", "content": response})
@@ -461,27 +645,32 @@ if prompt := st.chat_input("How can I help you today?"):
 # Welcome message if no messages
 if not st.session_state.messages:
     st.markdown("""
-    <div style="text-align: center; padding: 40px; background: rgba(255,255,255,0.9); border-radius: 20px; margin: 20px;">
-        <h2>👋 Welcome to TechSupport Pro!</h2>
-        <p style="font-size: 1.1em; color: #666;">
+    <div class="welcome-card" style="text-align: center;">
+        <h2 style="font-size: 2em; margin-bottom: 16px;">👋 Welcome to TechSupport Pro!</h2>
+        <p style="font-size: 1.15em; color: #b0b0c0; margin-bottom: 24px;">
             I'm your AI customer support assistant. I can help you with:
         </p>
-        <div style="display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; margin: 20px;">
-            <div style="background: #4CAF50; color: white; padding: 15px 25px; border-radius: 10px;">
+        <div style="display: flex; justify-content: center; gap: 16px; flex-wrap: wrap; margin: 24px 0;">
+            <div class="feature-badge" style="background: linear-gradient(135deg, #00b894 0%, #00cec9 100%);">
                 🔍 Browse Products
             </div>
-            <div style="background: #2196F3; color: white; padding: 15px 25px; border-radius: 10px;">
+            <div class="feature-badge" style="background: linear-gradient(135deg, #0984e3 0%, #74b9ff 100%);">
                 💰 Check Prices
             </div>
-            <div style="background: #FF9800; color: white; padding: 15px 25px; border-radius: 10px;">
+            <div class="feature-badge" style="background: linear-gradient(135deg, #e17055 0%, #fdcb6e 100%);">
                 📦 Track Orders
             </div>
-            <div style="background: #9C27B0; color: white; padding: 15px 25px; border-radius: 10px;">
+            <div class="feature-badge" style="background: linear-gradient(135deg, #6c5ce7 0%, #a29bfe 100%);">
                 🛒 Place Orders
             </div>
         </div>
-        <p style="color: #888; margin-top: 20px;">
+        <p style="color: #808090; margin-top: 24px; font-size: 1.05em;">
             <em>Try asking: "Show me gaming laptops" or "I need a 4K monitor"</em>
         </p>
+        <div style="margin-top: 24px; padding-top: 20px; border-top: 1px solid #3d3d5c;">
+            <p style="color: #606070; font-size: 0.9em;">
+                💡 <strong style="color: #00d4ff;">Tip:</strong> Verify your account first to access orders and make purchases
+            </p>
+        </div>
     </div>
     """, unsafe_allow_html=True)

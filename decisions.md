@@ -24,20 +24,22 @@ This document outlines the key architectural and code decisions made while build
 
 ---
 
-### 2. LLM Choice: Google Gemini 2.0 Flash
+### 2. LLM Choice: OpenRouter with GPT-4o-mini
 
-**Decision:** Use `gemini-2.0-flash-exp` as the language model.
+**Decision:** Use OpenRouter with `openai/gpt-4o-mini` model.
 
 **Rationale:**
-- Cost-effective (significantly cheaper than GPT-4)
-- Native function calling support
+- Reliable function/tool calling support (required for MCP integration)
 - Fast response times suitable for customer support
-- Free tier available for development/testing
-- Multi-turn conversation support
+- OpenAI-compatible API makes integration simple
+- High-quality responses from a capable model
+- Consistent availability and performance
 
 **Trade-offs:**
-- Experimental model may change behavior
-- Slightly less capable than larger models for complex reasoning
+- Not free (but very affordable at ~$0.15/1M input tokens)
+- Depends on third-party service (OpenRouter)
+
+**Update (Dec 2024):** Switched from Llama 3.2 free tier to GPT-4o-mini due to lack of tool/function calling support in the free Llama model. GPT-4o-mini provides reliable tool calling which is essential for MCP integration.
 
 ---
 
@@ -212,9 +214,92 @@ while iteration < max_iterations:
 
 ---
 
+## 🛡️ Resilience & Error Handling
+
+### 11. Retry Logic with Exponential Backoff
+
+**Decision:** Implement automatic retries with exponential backoff for API rate limits.
+
+**Implementation:**
+```python
+for attempt in range(max_retries):  # max_retries = 3
+    try:
+        response = chat.send_message(user_message)
+        # ... process response
+    except google_exceptions.ResourceExhausted:
+        if attempt < max_retries - 1:
+            wait_time = 2 ** attempt  # 1s, 2s, 4s
+            time.sleep(wait_time)
+            continue
+        else:
+            return "Rate limit error message..."
+```
+
+**Rationale:**
+- Google's free tier has strict rate limits (15 RPM for Gemini)
+- Exponential backoff prevents thundering herd
+- Graceful degradation with user-friendly error messages
+- Up to 3 retries before giving up
+
+---
+
+### 12. Reduced Conversation History
+
+**Decision:** Limit conversation history sent to the LLM to 6 messages.
+
+**Rationale:**
+- Reduces token usage per request
+- Lowers costs and helps stay within rate limits
+- 6 messages (3 turns) provides sufficient context for most queries
+- Prevents context window overflow on long conversations
+
+**Trade-off:**
+- May lose context in very long conversations
+- Mitigated by customer context in system prompt
+
+---
+
+### 13. Provider Selection: OpenRouter
+
+**Decision:** Use OpenRouter as the LLM provider instead of direct Gemini API.
+
+**Rationale:**
+- OpenRouter aggregates multiple LLM providers with unified API
+- OpenAI-compatible API makes code simpler and more portable
+- Better rate limits than Gemini free tier
+- Easy to switch models without code changes
+- Supports function calling with OpenAI models
+
+**Current Model:**
+- `openai/gpt-4o-mini` (default) - Affordable with excellent tool calling support
+
+**Alternative Models (if needed):**
+- `openai/gpt-3.5-turbo` - Cheaper, still supports function calling
+- `anthropic/claude-3-haiku` - Fast and affordable
+
+---
+
+### 14. Specific Exception Handling
+
+**Decision:** Catch and handle specific Google API exceptions.
+
+**Handled Exceptions:**
+| Exception | Handling |
+|-----------|----------|
+| `ResourceExhausted` | Retry with backoff, then user message |
+| `InvalidArgument` | Configuration error message |
+| Generic `Exception` | Retry once, then generic error |
+
+**Rationale:**
+- Different errors need different user messaging
+- Prevents exposing internal error details
+- Provides actionable feedback to users
+
+---
+
 ## 🎨 UI/UX Decisions
 
-### 11. Dark Theme with Cyan Accents
+### 15. Dark Theme with Cyan Accents
 
 **Decision:** Use a dark theme with `#00d4ff` (cyan) as the primary accent color.
 
@@ -233,7 +318,7 @@ while iteration < max_iterations:
 
 ---
 
-### 12. Sidebar for Controls, Main Area for Chat
+### 16. Sidebar for Controls, Main Area for Chat
 
 **Decision:** Place all controls/status in sidebar, keep main area focused on conversation.
 
@@ -251,7 +336,7 @@ while iteration < max_iterations:
 
 ---
 
-### 13. Quick Action Buttons
+### 17. Quick Action Buttons
 
 **Decision:** Provide pre-built quick action buttons for common tasks.
 
@@ -271,7 +356,7 @@ while iteration < max_iterations:
 
 ## 🔧 Infrastructure Decisions
 
-### 14. Minimal Dependencies
+### 18. Minimal Dependencies
 
 **Decision:** Keep dependencies minimal and well-maintained.
 
@@ -290,7 +375,7 @@ python-dotenv>=1.0.0       # Environment management
 
 ---
 
-### 15. API Key Management
+### 19. API Key Management
 
 **Decision:** Support multiple API key sources with priority order.
 
@@ -306,7 +391,7 @@ python-dotenv>=1.0.0       # Environment management
 
 ---
 
-### 16. Single-File MCP Client
+### 20. Single-File MCP Client
 
 **Decision:** Implement MCP client in a single `mcp_client.py` file.
 
@@ -333,6 +418,7 @@ python-dotenv>=1.0.0       # Environment management
 | LLM | Single model | Model router |
 | UI | Streamlit | React + FastAPI |
 | Tools | Static list | Dynamic discovery |
+| Rate Limits | Retry + backoff | Queue + caching |
 
 ---
 
@@ -343,9 +429,10 @@ python-dotenv>=1.0.0       # Environment management
 - No storage of sensitive customer data in session
 - XSRF protection enabled
 - CORS disabled (same-origin)
+- Error messages don't expose internal details
 
 ### Deferred for Production
-- Rate limiting
+- Rate limiting at application level
 - Input sanitization beyond LLM
 - Audit logging
 - PII encryption
@@ -360,6 +447,21 @@ The key philosophy behind these decisions was **simplicity first**:
 2. **Leverage LLM capabilities** - Let Gemini handle conversation flow
 3. **Clean interfaces** - MCP provides a standard tool interface
 4. **Progressive enhancement** - Start simple, upgrade as needed
+5. **Graceful degradation** - Handle errors without crashing
 
 This architecture supports rapid iteration while maintaining a clear path to production-ready scaling.
+
+---
+
+## 📅 Changelog
+
+| Date | Decision | Change |
+|------|----------|--------|
+| Initial | Model Selection | Used `gemini-2.0-flash-exp` |
+| Dec 2024 | Model Selection | Switched to `gemini-1.5-flash` for stability |
+| Dec 2024 | Provider Switch | Switched from Gemini to OpenRouter (Llama 3.2) |
+| Dec 2024 | Error Handling | Added retry logic with exponential backoff |
+| Dec 2024 | Token Optimization | Reduced history from 10 to 6 messages |
+| Dec 2024 | Debugging | Added debug logging for troubleshooting |
+| Dec 2024 | Model Update | Switched from Llama 3.2 free to GPT-4o-mini for tool calling support |
 
