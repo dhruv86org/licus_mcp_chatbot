@@ -24,9 +24,9 @@ This document outlines the key architectural and code decisions made while build
 
 ---
 
-### 2. LLM Choice: Google Gemini 2.0 Flash
+### 2. LLM Choice: Google Gemini 1.5 Flash
 
-**Decision:** Use `gemini-2.0-flash-exp` as the language model.
+**Decision:** Use `gemini-1.5-flash` as the language model.
 
 **Rationale:**
 - Cost-effective (significantly cheaper than GPT-4)
@@ -34,10 +34,13 @@ This document outlines the key architectural and code decisions made while build
 - Fast response times suitable for customer support
 - Free tier available for development/testing
 - Multi-turn conversation support
+- **Stable production model** (vs experimental versions)
 
 **Trade-offs:**
-- Experimental model may change behavior
 - Slightly less capable than larger models for complex reasoning
+- Rate limits on free tier require error handling
+
+**Update (Dec 2024):** Initially used `gemini-2.0-flash-exp` but switched to `gemini-1.5-flash` for stability and better rate limit handling in production.
 
 ---
 
@@ -212,9 +215,84 @@ while iteration < max_iterations:
 
 ---
 
+## 🛡️ Resilience & Error Handling
+
+### 11. Retry Logic with Exponential Backoff
+
+**Decision:** Implement automatic retries with exponential backoff for API rate limits.
+
+**Implementation:**
+```python
+for attempt in range(max_retries):  # max_retries = 3
+    try:
+        response = chat.send_message(user_message)
+        # ... process response
+    except google_exceptions.ResourceExhausted:
+        if attempt < max_retries - 1:
+            wait_time = 2 ** attempt  # 1s, 2s, 4s
+            time.sleep(wait_time)
+            continue
+        else:
+            return "Rate limit error message..."
+```
+
+**Rationale:**
+- Google's free tier has strict rate limits (15 RPM for Gemini)
+- Exponential backoff prevents thundering herd
+- Graceful degradation with user-friendly error messages
+- Up to 3 retries before giving up
+
+---
+
+### 12. Reduced Conversation History
+
+**Decision:** Limit conversation history sent to the LLM to 6 messages.
+
+**Rationale:**
+- Reduces token usage per request
+- Lowers costs and helps stay within rate limits
+- 6 messages (3 turns) provides sufficient context for most queries
+- Prevents context window overflow on long conversations
+
+**Trade-off:**
+- May lose context in very long conversations
+- Mitigated by customer context in system prompt
+
+---
+
+### 13. Stable Model Selection
+
+**Decision:** Use `gemini-1.5-flash` instead of experimental models.
+
+**Rationale:**
+- Experimental models (`gemini-2.0-flash-exp`) have stricter quotas
+- Production stability is more important than cutting-edge features
+- Consistent behavior across deployments
+- Better rate limit allowances
+
+---
+
+### 14. Specific Exception Handling
+
+**Decision:** Catch and handle specific Google API exceptions.
+
+**Handled Exceptions:**
+| Exception | Handling |
+|-----------|----------|
+| `ResourceExhausted` | Retry with backoff, then user message |
+| `InvalidArgument` | Configuration error message |
+| Generic `Exception` | Retry once, then generic error |
+
+**Rationale:**
+- Different errors need different user messaging
+- Prevents exposing internal error details
+- Provides actionable feedback to users
+
+---
+
 ## 🎨 UI/UX Decisions
 
-### 11. Dark Theme with Cyan Accents
+### 15. Dark Theme with Cyan Accents
 
 **Decision:** Use a dark theme with `#00d4ff` (cyan) as the primary accent color.
 
@@ -233,7 +311,7 @@ while iteration < max_iterations:
 
 ---
 
-### 12. Sidebar for Controls, Main Area for Chat
+### 16. Sidebar for Controls, Main Area for Chat
 
 **Decision:** Place all controls/status in sidebar, keep main area focused on conversation.
 
@@ -251,7 +329,7 @@ while iteration < max_iterations:
 
 ---
 
-### 13. Quick Action Buttons
+### 17. Quick Action Buttons
 
 **Decision:** Provide pre-built quick action buttons for common tasks.
 
@@ -271,7 +349,7 @@ while iteration < max_iterations:
 
 ## 🔧 Infrastructure Decisions
 
-### 14. Minimal Dependencies
+### 18. Minimal Dependencies
 
 **Decision:** Keep dependencies minimal and well-maintained.
 
@@ -290,7 +368,7 @@ python-dotenv>=1.0.0       # Environment management
 
 ---
 
-### 15. API Key Management
+### 19. API Key Management
 
 **Decision:** Support multiple API key sources with priority order.
 
@@ -306,7 +384,7 @@ python-dotenv>=1.0.0       # Environment management
 
 ---
 
-### 16. Single-File MCP Client
+### 20. Single-File MCP Client
 
 **Decision:** Implement MCP client in a single `mcp_client.py` file.
 
@@ -333,6 +411,7 @@ python-dotenv>=1.0.0       # Environment management
 | LLM | Single model | Model router |
 | UI | Streamlit | React + FastAPI |
 | Tools | Static list | Dynamic discovery |
+| Rate Limits | Retry + backoff | Queue + caching |
 
 ---
 
@@ -343,9 +422,10 @@ python-dotenv>=1.0.0       # Environment management
 - No storage of sensitive customer data in session
 - XSRF protection enabled
 - CORS disabled (same-origin)
+- Error messages don't expose internal details
 
 ### Deferred for Production
-- Rate limiting
+- Rate limiting at application level
 - Input sanitization beyond LLM
 - Audit logging
 - PII encryption
@@ -360,6 +440,18 @@ The key philosophy behind these decisions was **simplicity first**:
 2. **Leverage LLM capabilities** - Let Gemini handle conversation flow
 3. **Clean interfaces** - MCP provides a standard tool interface
 4. **Progressive enhancement** - Start simple, upgrade as needed
+5. **Graceful degradation** - Handle errors without crashing
 
 This architecture supports rapid iteration while maintaining a clear path to production-ready scaling.
+
+---
+
+## 📅 Changelog
+
+| Date | Decision | Change |
+|------|----------|--------|
+| Initial | Model Selection | Used `gemini-2.0-flash-exp` |
+| Dec 2024 | Model Selection | Switched to `gemini-1.5-flash` for stability |
+| Dec 2024 | Error Handling | Added retry logic with exponential backoff |
+| Dec 2024 | Token Optimization | Reduced history from 10 to 6 messages |
 

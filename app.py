@@ -5,7 +5,9 @@ Built with Streamlit and Google Gemini Flash
 import streamlit as st
 import asyncio
 import json
+import time
 import google.generativeai as genai
+from google.api_core import exceptions as google_exceptions
 from mcp_client import MCPClient, MCP_TOOLS, get_tool_definitions_for_gemini
 
 # Configuration
@@ -235,7 +237,7 @@ When using tools:
 """
 
 
-def chat_with_gemini(user_message: str) -> str:
+def chat_with_gemini(user_message: str, max_retries: int = 3) -> str:
     """Send a message to Gemini and get a response with tool use"""
     api_key = get_gemini_api_key()
     if not api_key:
@@ -243,72 +245,96 @@ def chat_with_gemini(user_message: str) -> str:
     
     genai.configure(api_key=api_key)
     
-    # Initialize model with tools
+    # Initialize model with tools - use stable model instead of experimental
     model = genai.GenerativeModel(
-        model_name="gemini-2.0-flash-exp",
+        model_name="gemini-1.5-flash",
         tools=[get_tool_definitions_for_gemini()],
         system_instruction=get_system_prompt()
     )
     
-    # Build conversation history
+    # Build conversation history - limit to last 6 messages to reduce token usage
     history = []
-    for msg in st.session_state.messages[-10:]:  # Last 10 messages for context
+    for msg in st.session_state.messages[-6:]:
         role = "user" if msg["role"] == "user" else "model"
         history.append({"role": role, "parts": [msg["content"]]})
     
     # Start chat
     chat = model.start_chat(history=history)
     
-    # Send message and handle tool calls
-    response = chat.send_message(user_message)
-    
-    # Process any tool calls
-    max_iterations = 5
-    iteration = 0
-    all_tool_results = []
-    
-    while iteration < max_iterations:
-        has_tool_call = any(
-            hasattr(part, 'function_call') and part.function_call 
-            for part in response.parts
-        )
-        
-        if not has_tool_call:
-            break
-        
-        tool_results = process_tool_calls(response)
-        all_tool_results.extend(tool_results)
-        
-        # Send tool results back to the model
-        function_responses = []
-        for tr in tool_results:
-            function_responses.append(
-                genai.protos.Part(
-                    function_response=genai.protos.FunctionResponse(
-                        name=tr["tool"],
-                        response={"result": tr["result"]}
-                    )
+    # Retry logic with exponential backoff for rate limits
+    for attempt in range(max_retries):
+        try:
+            # Send message and handle tool calls
+            response = chat.send_message(user_message)
+            
+            # Process any tool calls
+            max_iterations = 5
+            iteration = 0
+            all_tool_results = []
+            
+            while iteration < max_iterations:
+                has_tool_call = any(
+                    hasattr(part, 'function_call') and part.function_call 
+                    for part in response.parts
                 )
-            )
+                
+                if not has_tool_call:
+                    break
+                
+                tool_results = process_tool_calls(response)
+                all_tool_results.extend(tool_results)
+                
+                # Send tool results back to the model
+                function_responses = []
+                for tr in tool_results:
+                    function_responses.append(
+                        genai.protos.Part(
+                            function_response=genai.protos.FunctionResponse(
+                                name=tr["tool"],
+                                response={"result": tr["result"]}
+                            )
+                        )
+                    )
+                
+                response = chat.send_message(function_responses)
+                iteration += 1
+            
+            # Extract final text response
+            final_response = ""
+            for part in response.parts:
+                if hasattr(part, 'text') and part.text:
+                    final_response += part.text
+            
+            # Add tool call info to response if any
+            if all_tool_results:
+                tool_info = "\n\n---\n*Tools used:*\n"
+                for tr in all_tool_results:
+                    tool_info += f"- `{tr['tool']}({json.dumps(tr['arguments'])})`\n"
+                # Optionally append tool info (commented out for cleaner UI)
+                # final_response += tool_info
+            
+            return final_response or "I apologize, but I couldn't generate a response. Please try again."
         
-        response = chat.send_message(function_responses)
-        iteration += 1
+        except google_exceptions.ResourceExhausted as e:
+            if attempt < max_retries - 1:
+                # Exponential backoff: wait 2^attempt seconds (1, 2, 4 seconds)
+                wait_time = 2 ** attempt
+                time.sleep(wait_time)
+                continue
+            else:
+                return "⚠️ **Rate Limit Exceeded**\n\nThe AI service is currently experiencing high demand. Please try again in a few moments.\n\n*Tip: You can also try clearing the chat history to reduce token usage.*"
+        
+        except google_exceptions.InvalidArgument as e:
+            return f"⚠️ **Configuration Error**\n\nThere was an issue with the request. Please check your API key configuration.\n\n*Error: {str(e)}*"
+        
+        except Exception as e:
+            if attempt < max_retries - 1:
+                time.sleep(1)
+                continue
+            else:
+                return f"⚠️ **Error**\n\nAn unexpected error occurred. Please try again.\n\n*Error: {str(e)}*"
     
-    # Extract final text response
-    final_response = ""
-    for part in response.parts:
-        if hasattr(part, 'text') and part.text:
-            final_response += part.text
-    
-    # Add tool call info to response if any
-    if all_tool_results:
-        tool_info = "\n\n---\n*Tools used:*\n"
-        for tr in all_tool_results:
-            tool_info += f"- `{tr['tool']}({json.dumps(tr['arguments'])})`\n"
-        # Optionally append tool info (commented out for cleaner UI)
-        # final_response += tool_info
-    
-    return final_response or "I apologize, but I couldn't generate a response. Please try again."
+    return "I apologize, but I couldn't generate a response. Please try again."
 
 
 # Sidebar
@@ -325,7 +351,7 @@ with st.sidebar:
     # Connection status
     st.markdown("### 🔌 System Status")
     st.markdown(f"**MCP Server:** <span class='status-connected'>Connected</span>", unsafe_allow_html=True)
-    st.markdown(f"**LLM:** Gemini 2.0 Flash")
+    st.markdown(f"**LLM:** Gemini 1.5 Flash")
     
     st.divider()
     
